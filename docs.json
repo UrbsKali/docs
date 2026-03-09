@@ -86,8 +86,8 @@
     "links": [],
     "primary": {
       "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
+      "label": "Kickstarter",
+      "href": "https://kickstarter.com/projects/322093471/1816942435"
     }
   },
   "contextual": {
@@ -109,8 +109,5 @@
   },
   "background": {
     "decoration": "windows"
-  },
-  "banner": {
-    "dismissible": false
   }
 }
