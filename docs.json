@@ -109,5 +109,6 @@
   },
   "background": {
     "decoration": "windows"
-  }
+  },
+  "description": "E-spin, the dev board you'll actually carry"
 }
