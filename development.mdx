@@ -1,94 +1,156 @@
 ---
-title: 'Development'
-description: 'Preview changes locally to update your docs'
+title: "Read IMU Raw Data"
+description: "Pull live accelerometer, gyroscope, and temperature data from the onboard QMI8658."
+difficulty: "Beginner"
+tags: ["IMU", "I2C", "Sensors"]
 ---
 
-<Info>
-  **Prerequisites**:
-  - Node.js version 19 or higher
-  - A docs repository with a `docs.json` file
-</Info>
+<Note>
+This tutorial assumes you have already installed the QMI8658 library and know how to flash the board. See the [library installation guide](#) and [getting started guide](#) if needed.
+</Note>
 
-Follow these steps to install and run Mintlify on your operating system.
+## What is an IMU?
 
-<Steps>
-<Step title="Install the Mintlify CLI">
+An **Inertial Measurement Unit** (IMU) is a sensor that measures motion. The QMI8658 on E-Spin is a 6-axis IMU, meaning it provides two types of measurements:
 
-```bash
-npm i -g mint
+- **Accelerometer (3 axes)** — measures proper acceleration, i.e. the force applied to the sensor. At rest flat on a table, it reads ~1g on the Z axis (Earth's gravity). In free fall, it reads 0g. This lets you determine tilt and detect sudden impacts.
+
+- **Gyroscope (3 axes)** — measures angular velocity in degrees per second (°/s). It tells you *how fast* the sensor is rotating around each axis, not the absolute angle.
+
+Together, they're the foundation for any motion-aware application: gesture detection, orientation tracking, spin speed measurement, step counting, vibration analysis.
+
+The QMI8658 also includes a **temperature sensor** — useful for compensating sensor drift, since gyroscope bias shifts with temperature.
+
+**On E-Spin specifically**, the IMU is what makes the board aware that it's spinning. The gyroscope Z-axis is your RPM source. The accelerometer detects taps, drops, and orientation.
+
+---
+
+## Library
+
+This tutorial uses the **QMI8658 Arduino Library** by [Lahav Gahali](https://github.com/lahavg/QMI8658-Arduino-Library), MIT licensed.
+
 ```
-</Step>
-
-<Step title="Preview locally">
-
-Navigate to your docs directory where your `docs.json` file is located, and run the following command:
-
-```bash
-mint dev
-```
-
-A local preview of your documentation will be available at `http://localhost:3000`.
-
-</Step>
-</Steps>
-
-## Custom ports
-
-By default, Mintlify uses port 3000. You can customize the port Mintlify runs on by using the `--port` flag. For example, to run Mintlify on port 3333, use this command:
-
-```bash
-mint dev --port 3333
+lahavg/QMI8658 @ ^1.0.1
 ```
 
-If you attempt to run Mintlify on a port that's already in use, it will use the next available port:
-
-```md
-Port 3000 is already in use. Trying 3001 instead.
+Add to your `platformio.ini`:
+```ini
+lib_deps =
+    lahavg/QMI8658@^1.0.1
 ```
 
-## Mintlify versions
+---
 
-Please note that each CLI release is associated with a specific version of Mintlify. If your local preview does not align with the production version, please update the CLI:
+## Wiring
 
-```bash
-npm mint update
+No external wiring needed. The QMI8658 is connected directly to the ESP32-C3 on the PCB.
+
+Check your board's silkscreen or schematic for the exact pin assignment. On current E-Spin hardware:
+
+| Signal | GPIO |
+|--------|------|
+| SDA    | 5    |
+| SCL    | 4    |
+
+The I2C address is `0x6A` (SA0 low) or `0x6B` (SA0 high) — the library auto-detects it.
+
+---
+
+## Code
+
+```cpp
+#include <Wire.h>
+#include <QMI8658.h>
+
+#define SDA_PIN 5
+#define SCL_PIN 4
+
+QMI8658 imu;
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial) delay(10);
+
+  if (!imu.begin(SDA_PIN, SCL_PIN)) {
+    Serial.println("QMI8658 not found. Check wiring and I2C address.");
+    while (1) delay(1000);
+  }
+
+  Serial.print("QMI8658 detected. Device ID: 0x");
+  Serial.println(imu.getWhoAmI(), HEX);  // Should print 0x05
+
+  // Configure ranges
+  imu.setAccelRange(QMI8658_ACCEL_RANGE_8G);      // ±8g — enough headroom for taps
+  imu.setGyroRange(QMI8658_GYRO_RANGE_2048DPS);   // ±2048 dps — spinner needs this
+
+  // Output data rate: 1000Hz internally, we'll read slower
+  imu.setAccelODR(QMI8658_ACCEL_ODR_1000HZ);
+  imu.setGyroODR(QMI8658_GYRO_ODR_1000HZ);
+
+  // Set units
+  imu.setAccelUnit_mps2(true);   // m/s²
+  imu.setGyroUnit_dps(true);     // degrees per second
+
+  imu.enableSensors(QMI8658_ENABLE_ACCEL | QMI8658_ENABLE_GYRO);
+
+  Serial.println("Accel (m/s²) | Gyro (dps) | Temp (°C)");
+  Serial.println("-------------------------------------------");
+}
+
+void loop() {
+  QMI8658_Data data;
+
+  if (imu.readSensorData(data)) {
+    Serial.printf("A: %6.2f %6.2f %6.2f | G: %8.2f %8.2f %8.2f | T: %.1f\n",
+      data.accelX, data.accelY, data.accelZ,
+      data.gyroX,  data.gyroY,  data.gyroZ,
+      data.temperature
+    );
+  }
+
+  delay(50); // ~20Hz print rate
+}
 ```
 
-## Validating links
+---
 
-The CLI can assist with validating links in your documentation. To identify any broken links, use the following command:
+## Walkthrough
 
-```bash
-mint broken-links
+### What the ranges mean
+
+**Accelerometer range** controls how large an acceleration the sensor can measure before clipping. `±8g` covers normal use — a hard tap registers around 3–5g. If you were mounting this on a drone or rocket, you'd go higher.
+
+**Gyroscope range** is critical for E-Spin. A spinner at 300 RPM rotates at 1800°/s. At 500 RPM that's 3000°/s, which exceeds `±2048 dps`. For very fast spins, this channel will saturate — the fusion filter tutorial addresses this.
+
+### Reading the output
+
+Open the Serial Monitor at 115200 baud. You should see a table like:
+
+```
+A:  -0.12   0.08   9.82 | G:    0.43   -1.62    0.28 | T: 28.7
+A:  -0.11   0.09   9.81 | G:    0.51   -1.55    0.31 | T: 28.7
 ```
 
-## Deployment
+- **A (accel):** at rest flat, Z ≈ 9.81 m/s² (gravity). Tilt the board and the gravity vector redistributes across X/Y/Z.
+- **G (gyro):** at rest, values should be near zero with a small constant offset called **bias** — that's normal and expected. Rotate the board and the relevant axis spikes.
+- **T:** die temperature in °C. Gyro bias drifts with temperature; the fusion filter tutorial will handle compensation.
 
-If the deployment is successful, you should see the following:
+### Checking the device ID
 
-<Frame>
-  <img src="/images/checks-passed.png" alt="Screenshot of a deployment confirmation message that says All checks have passed." style={{ borderRadius: '0.5rem' }} />
-</Frame>
+`imu.getWhoAmI()` should return `0x05`. If it returns `0x00` or `0xFF`, the sensor isn't responding — run the I2C scanner first to confirm the address and connection.
 
-## Code formatting
+### Gyro range for spinning
 
-We suggest using extensions on your IDE to recognize and format MDX. If you're a VSCode user, consider the [MDX VSCode extension](https://marketplace.visualstudio.com/items?itemName=unifiedjs.vscode-mdx) for syntax highlighting, and [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode) for code formatting.
+The E-Spin board is designed to spin. Use `QMI8658_GYRO_RANGE_2048DPS` as your default — lower ranges will saturate and give you flat-topped garbage data the moment you flick it. If you're only reading at rest (tap detection, orientation), `512DPS` gives better resolution.
 
-## Troubleshooting
+---
 
-<AccordionGroup>
-  <Accordion title='Error: Could not load the "sharp" module using the darwin-arm64 runtime'>
+## What the raw data cannot tell you
 
-    This may be due to an outdated version of node. Try the following:
-    1. Remove the currently-installed version of the CLI: `npm remove -g mint`
-    2. Upgrade to Node v19 or higher.
-    3. Reinstall the CLI: `npm i -g mint`
-  </Accordion>
+Raw gyroscope values give you rotation *rate*, not angle. Raw accelerometer values give you force, which blends gravity and motion together. Neither alone gives you a clean orientation.
 
-  <Accordion title="Issue: Encountering an unknown error">
-  
-    Solution: Go to the root of your device and delete the `~/.mintlify` folder. Then run `mint dev` again.
-  </Accordion>
-</AccordionGroup>
+To get tilt angles, heading, or quaternions — that's the next tutorial.
 
-Curious about what changed in the latest CLI version? Check out the [CLI changelog](https://www.npmjs.com/package/mintlify?activeTab=versions).
+<Card title="IMU Fusion Filter" icon="axis-3d" href="/projects/imu-fusion">
+  Combine accel and gyro with a complementary or Madgwick filter to get stable orientation angles.
+</Card>
